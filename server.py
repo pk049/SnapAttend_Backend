@@ -1,3 +1,4 @@
+import os
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from pymongo import MongoClient
@@ -5,8 +6,9 @@ from pymongo import MongoClient
 app = Flask(__name__)
 CORS(app)  # Allow requests from Flutter
 
-# Connect to MongoDB
-client = MongoClient("mongodb+srv://21uai019:O2OLlukOZ8POqvUg@megaproject-snapattend.tuf5i1s.mongodb.net/")
+# Connect to MongoDBimport os
+mongo_uri = os.environ.get("MONGO_URI")
+client = MongoClient(mongo_uri)
 db = client['SA-General']
 faculty_collection = db['Faculty']
 
