@@ -34,5 +34,32 @@ def login():
     else:
         return jsonify({'status': 'fail', 'message': 'Invalid email or password'}), 401
 
+
+
+@app.route('/get_subjects', methods=['POST'])
+def get_subjects():
+    data = request.get_json()
+    
+    classroom = data.get('class')
+    print(classroom)
+    
+    # Find subjects matching the class
+    subjects_cursor = subject_collection.find({'class': classroom})
+
+    # Extract only the 'course_name' fields
+    course_names = [subject.get('course_name') for subject in subjects_cursor]
+
+    if course_names:
+        return jsonify({
+            'status': 'success',
+            'subjects': course_names
+        })
+    else:
+        return jsonify({'status': 'fail', 'message': 'Invalid Classname......'}), 401
+
+
 if __name__ == '__main__':
     app.run(debug=True, host="0.0.0.0")
+
+
+
