@@ -1,4 +1,3 @@
-import os
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from pymongo import MongoClient
@@ -6,19 +5,23 @@ from pymongo import MongoClient
 app = Flask(__name__)
 CORS(app)  # Allow requests from Flutter
 
-# Connect to MongoDBimport os
-mongo_uri = os.environ.get("MONGO_URI")
-client = MongoClient(mongo_uri)
+# Connect to MongoDB
+client = MongoClient("MONGO_URI")
+# Get database
 db = client['SA-General']
-faculty_collection = db['Faculty']
 
-# Debug: Print all documents from faculty collection (optional)
-for doc in faculty_collection.find():
-    print(doc)
+# Collections
+faculty_collection = db['Faculty']
+subject_collection=db['subject-class']
+
+
+
+
 
 @app.route('/login', methods=['POST'])
 def login():
     data = request.get_json()
+    
     email = data.get('email')
     password = data.get('password')
 
@@ -33,7 +36,6 @@ def login():
         })
     else:
         return jsonify({'status': 'fail', 'message': 'Invalid email or password'}), 401
-
 
 
 @app.route('/get_subjects', methods=['POST'])
@@ -58,8 +60,6 @@ def get_subjects():
         return jsonify({'status': 'fail', 'message': 'Invalid Classname......'}), 401
 
 
+
 if __name__ == '__main__':
     app.run(debug=True, host="0.0.0.0")
-
-
-
