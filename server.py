@@ -247,18 +247,184 @@ def get_lecture_logs():
     
     
     
+
+# Add this new route to your server.py
+@app.route('/update_lecture_logs', methods=['POST'])
+def update_lecture_logs():
+    data = request.get_json()
+    
+    # Extract required fields
+    subject = data.get('subject')
+    lecture_number = data.get('lecture_number')
+    division = data.get('division')
+    class_name = data.get('class_name')
+    department = data.get('department')
+    updated_logs = data.get('updated_logs', [])
+    
+    # Format class name according to your existing logic
+    if division == 'NA' or division == 'N/A':
+        collection_name = f"{class_name}_{department}"
+        division = 'NA'
+    else:
+        collection_name = f"{class_name}{department}{division}"
+    
+    # Validate data
+    if not all([subject, lecture_number, updated_logs]):
+        return jsonify({'status': 'fail', 'message': 'Missing required fields'}), 400
+    
+    # Check if collection exists
+    if collection_name not in db2.list_collection_names():
+        return jsonify({'status': 'fail', 'message': f'Collection {collection_name} not found'}), 404
+    
+    try:
+        # Get the target collection
+        target_collection = db2[collection_name]
+        
+        # Update each record
+        for log in updated_logs:
+            prn = log.get('PRN')
+            new_status = log.get('status')
+            student_id = log.get('_id')
+            reason = log.get('reason')  # Get reason field
+            
+            # Validate student data
+            if not (prn and new_status):
+                continue
+                
+            # Build query to find the specific record
+            query = {
+                "subject": subject,
+                "lecture_number": lecture_number,
+                "division": division,
+                "PRN": prn
+            }
+            
+            # If we have an ObjectId, use it for more precise targeting
+            if student_id:
+                try:
+                    query["_id"] = ObjectId(student_id)
+                except:
+                    # If ID conversion fails, continue with PRN-based query
+                    pass
+            
+            # Prepare update data
+            update_data = {"status": new_status}
+            
+            # Add reason field for "not considered" status
+            if new_status.lower() == 'not considered' and reason:
+                update_data["reason"] = reason
+            else:
+                # Use $unset to remove the reason field if it exists
+                target_collection.update_one(
+                    query,
+                    {"$unset": {"reason": ""}}
+                )
+            
+            # Update the record
+            target_collection.update_one(
+                query,
+                {"$set": update_data}
+            )
+            
+        # Also update the general lecture collection if needed
+        # This depends on your data structure
+        
+        return jsonify({'status': 'success', 'message': 'Attendance updated successfully'})
+        
+    except Exception as e:
+        return jsonify({'status': 'fail', 'message': str(e)}), 500
+
     
     
     
     
     
+
+
+
+
+
+@app.route('/subject-based-report', methods=['POST'])
+def get_subject_based_report():
+    data = request.get_json()
     
+    classroom = data.get('class')
+    division = data.get('division')
+    subject = data.get('subject')
     
+    if not all([classroom, division, subject]):
+        return jsonify({'status': 'fail', 'message': 'Missing required fields'}), 400
     
+    # Format collection name
+    collection_name = f"{classroom}" if division in ["NA", "N/A"] else f"{classroom}_{division}"
     
+    try:
+        # Check if subject has any lectures at all
+        lecture_count_doc = lecture_count_collection.find_one({
+            'class_name': collection_name, 
+            'subject': subject
+        })
+        
+        if not lecture_count_doc:
+            return jsonify({'status': 'fail', 'message': 'No lectures found for this subject'}), 404
+        
+        total_lectures = lecture_count_doc.get('count', 0)
+        
+        if total_lectures == 0:
+            return jsonify({'status': 'fail', 'message': 'No lectures conducted for this subject'}), 404
+        
+        # Get student list
+        students_cursor = students_collection.find({'class_name': collection_name})
+        attendance_collection = db2[collection_name]
+        
+        attendance_report = []
+        
+        for student in students_cursor:
+            prn = student.get('PRN')
+            name = student.get('name')
+            
+            # Fetch all attendance records for this student and subject
+            attendance_records = list(attendance_collection.find({
+                'PRN': prn,
+                'subject': subject
+            }))
+            
+            present_count = 0
+            effective_total = 0
+            
+            for record in attendance_records:
+                status = record.get('status', '').lower()
+                if status == 'present':
+                    present_count += 1
+                if status != 'not considered':
+                    effective_total += 1
+            
+            percentage = 0
+            if effective_total > 0:
+                percentage = (present_count / effective_total) * 100
+            
+            attendance_report.append({
+                'PRN': prn,
+                'name': name,
+                'present_count': present_count,
+                'total_lectures': effective_total,
+                'percentage': round(percentage, 2)
+            })
+        
+        return jsonify({
+            'status': 'success',
+            'report': attendance_report,
+            'subject': subject,
+            'class_name': collection_name,
+            'total_lectures': total_lectures
+        })
     
+    except Exception as e:
+        return jsonify({'status': 'fail', 'message': str(e)}), 500
+
+
     
-    
+
     
 if __name__ == '__main__':
     app.run(debug=True, host="0.0.0.0")
