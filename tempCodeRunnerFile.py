@@ -336,47 +336,50 @@ def update_lecture_logs():
 
     
     
-# Server endpoint for subject-based report
+    
+    
+    
+
+
+
+
+
 @app.route('/subject-based-report', methods=['POST'])
 def get_subject_based_report():
     data = request.get_json()
     
-    # Extract parameters from request
     class_name = data.get('class')
     division = data.get('division')
     subject = data.get('subject')
-    department = data.get('department')
+    department = data.get('department')  # Need to ensure department is passed from frontend
     
-    print(f"Subject report request - Class: {class_name}, Division: {division}, Subject: {subject}, Department: {department}")
+    if not all([class_name, subject, department]):
+        return jsonify({'status': 'fail', 'message': 'Missing required fields (class, subject, department)'}), 400
     
-    # Validate required fields
-    if not all([class_name, subject, department]):  # Division can be NA
-        return jsonify({'status': 'fail', 'message': 'Missing required fields'}), 400
-    
-    # Format collection name consistently with other endpoints
-    if division in ('NA', 'N/A'):
+    # Format collection name correctly based on your schema - matching the pattern from get_lecture_logs
+    if division == "NA" or division == "N/A":
         collection_name = f"{class_name}_{department}"
         division = 'NA'
     else:
         collection_name = f"{class_name}_{department}_{division}"
     
-    print(f"Using collection name: {collection_name}")
+    print("Department:", department)
+    print("Collection name:", collection_name)
     
     try:
         # Check if subject has any lectures at all
         lecture_count_doc = lecture_count_collection.find_one({
-            'class_name': collection_name,
+            'class_name': collection_name, 
             'subject': subject
         })
         
         if not lecture_count_doc:
-            print(f"No lectures found for subject {subject} in collection {collection_name}")
-            return jsonify({'status': 'success', 'report': [], 'total_lectures': 0}), 200
+            return jsonify({'status': 'fail', 'message': 'No lectures found for this subject'}), 404
         
         total_lectures = lecture_count_doc.get('count', 0)
         
         if total_lectures == 0:
-            return jsonify({'status': 'success', 'report': [], 'total_lectures': 0}), 200
+            return jsonify({'status': 'fail', 'message': 'No lectures conducted for this subject'}), 404
         
         # Get student list
         students_cursor = students_collection.find({'class_name': collection_name})
@@ -385,9 +388,9 @@ def get_subject_based_report():
         attendance_report = []
         
         for student in students_cursor:
-            prn = student.get('prn')
+            prn = student.get('PRN')
             name = student.get('name')
-            print(prn,name) 
+            roll_number = student.get('roll_number', 'N/A')
             
             # Fetch all attendance records for this student and subject
             attendance_records = list(attendance_collection.find({
@@ -396,43 +399,58 @@ def get_subject_based_report():
             }))
             
             present_count = 0
-            effective_total = 0
+            absent_count = 0
+            not_considered_count = 0
+            total_records = len(attendance_records)
             
             for record in attendance_records:
                 status = record.get('status', '').lower()
                 if status == 'present':
                     present_count += 1
-                if status != 'not considered':
-                    effective_total += 1
+                elif status == 'absent':
+                    absent_count += 1
+                elif status == 'not considered':
+                    not_considered_count += 1
             
-            percentage = 0
+            # Calculate effective total (excluding "not considered")
+            effective_total = total_records - not_considered_count
+            
+            # Avoid division by zero
+            percentage = 0.0  # Explicitly use a float/double
             if effective_total > 0:
-                percentage = (present_count / effective_total) * 100
+                percentage = float(present_count) / float(effective_total) * 100.0
             
+            # Add record with detailed attendance information
             attendance_report.append({
                 'PRN': prn,
                 'name': name,
+                'roll_number': roll_number,
                 'present_count': present_count,
+                'absent_count': absent_count,
+                'not_considered': not_considered_count,
                 'total_lectures': effective_total,
-                'percentage': round(percentage, 2)
+                'total_records': total_records,
+                'percentage': float(round(percentage, 2))  # Ensure this is a float/double
             })
         
-        # Sort the report by name for better readability
-        attendance_report.sort(key=lambda x: x.get('name', '').lower())
+        # Sort by percentage (optional)
+        attendance_report.sort(key=lambda x: x['percentage'], reverse=True)
         
         return jsonify({
             'status': 'success',
             'report': attendance_report,
             'subject': subject,
             'class_name': collection_name,
-            'total_lectures': total_lectures
+            'division': division,
+            'total_lectures': total_lectures,
+            'total_students': len(attendance_report)
         })
     
     except Exception as e:
-        print(f"Error in subject-based report: {str(e)}")  # Add detailed logging
-        import traceback
-        traceback.print_exc()  # Print stack trace for better debugging
-        return jsonify({'status': 'fail', 'message': f"Server error: {str(e)}"}), 500
+        print(f"Error in subject-based-report: {str(e)}")
+        return jsonify({'status': 'fail', 'message': str(e)}), 500
+
+    
 
     
 if __name__ == '__main__':
