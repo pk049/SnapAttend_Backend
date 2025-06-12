@@ -3,6 +3,14 @@ from flask_cors import CORS
 from pymongo import MongoClient
 from bson.objectid import ObjectId
 import json
+import pandas as pd
+import io
+from flask import send_file
+import tempfile
+from reportlab.lib import colors
+from reportlab.lib.pagesizes import letter
+from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+from reportlab.lib.styles import getSampleStyleSheet
 
 
 app = Flask(__name__)
@@ -434,6 +442,201 @@ def get_subject_based_report():
         traceback.print_exc()  # Print stack trace for better debugging
         return jsonify({'status': 'fail', 'message': f"Server error: {str(e)}"}), 500
 
+
+
+
+
+
+
+
+
+# Add this new download-report endpoint to your server.py
+
+@app.route('/download-report', methods=['POST'])
+def download_report():
+    data = request.get_json()
+    
+    # Extract parameters from request
+    class_name = data.get('class')
+    division = data.get('division')
+    subject = data.get('subject')
+    department = data.get('department')
+    format = data.get('format', 'csv')  # Default to CSV if not specified
+    
+    # Validate required fields
+    if not all([class_name, subject, department]):
+        return jsonify({'status': 'fail', 'message': 'Missing required fields'}), 400
+    
+    # Format collection name consistently with other endpoints
+    if division in ('NA', 'N/A'):
+        collection_name = f"{class_name}_{department}"
+        division = 'NA'
+    else:
+        collection_name = f"{class_name}_{department}_{division}"
+    
+    try:
+        # First, get the attendance data using the existing function's logic
+        lecture_count_doc = lecture_count_collection.find_one({
+            'class_name': collection_name,
+            'subject': subject
+        })
+        
+        if not lecture_count_doc:
+            return jsonify({'status': 'fail', 'message': f'No lectures found for subject {subject}'}), 404
+        
+        total_lectures = lecture_count_doc.get('count', 0)
+        
+        if total_lectures == 0:
+            return jsonify({'status': 'fail', 'message': 'No lectures recorded for this subject'}), 404
+        
+        # Get student list
+        students_cursor = students_collection.find({'class_name': collection_name})
+        attendance_collection = db2[collection_name]
+        
+        attendance_report = []
+        
+        for student in students_cursor:
+            prn = student.get('prn')
+            name = student.get('name')
+            
+            # Fetch all attendance records for this student and subject
+            attendance_records = list(attendance_collection.find({
+                'PRN': prn,
+                'subject': subject
+            }))
+            
+            present_count = 0
+            effective_total = 0
+            
+            for record in attendance_records:
+                status = record.get('status', '').lower()
+                if status == 'present':
+                    present_count += 1
+                if status != 'not considered':
+                    effective_total += 1
+            
+            percentage = 0
+            if effective_total > 0:
+                percentage = (present_count / effective_total) * 100
+            
+            attendance_report.append({
+                'PRN': prn,
+                'Name': name,  # Capitalize column name for report
+                'Present': present_count,
+                'Total': effective_total,
+                'Percentage': round(percentage, 2)
+            })
+        
+        # Sort the report by name for better readability
+        attendance_report.sort(key=lambda x: x.get('Name', '').lower())
+        
+        # Create title for the report
+        report_title = f"Attendance Report - {subject} ({class_name} {division})"
+        
+        # Generate the requested format
+        if format.lower() == 'csv':
+            # Convert to pandas DataFrame
+            df = pd.DataFrame(attendance_report)
+            
+            # Create a string buffer to hold the CSV data
+            csv_buffer = io.StringIO()
+            df.to_csv(csv_buffer, index=False)
+            
+            # Create bytes buffer for the response
+            mem = io.BytesIO()
+            mem.write(csv_buffer.getvalue().encode('utf-8'))
+            mem.seek(0)
+            
+            # Set filename for download
+            filename = f"attendance_report_{class_name}_{division}_{subject}.csv"
+            
+            return send_file(
+                mem,
+                mimetype='text/csv',
+                download_name=filename,
+                as_attachment=True
+            )
+            
+        elif format.lower() == 'pdf':
+            # Create a temporary file for the PDF
+            with tempfile.NamedTemporaryFile(suffix='.pdf', delete=False) as tmp:
+                # Build PDF with reportlab
+                doc = SimpleDocTemplate(tmp.name, pagesize=letter)
+                styles = getSampleStyleSheet()
+                
+                # Content elements for the PDF
+                elements = []
+                
+                # Title
+                title = Paragraph(report_title, styles['Title'])
+                elements.append(title)
+                elements.append(Spacer(1, 20))
+                
+                # Department and class info
+                info_text = f"Department: {department} | Class: {class_name} | Division: {division}"
+                info = Paragraph(info_text, styles['Normal'])
+                elements.append(info)
+                elements.append(Spacer(1, 10))
+                
+                # Extract data for table
+                data = [['PRN', 'Name', 'Present/Total', 'Attendance %']]  # Header row
+                
+                for student in attendance_report:
+                    data.append([
+                        student['PRN'],
+                        student['Name'],
+                        f"{student['Present']}/{student['Total']}",
+                        f"{student['Percentage']}%"
+                    ])
+                
+                # Create table and set style
+                table = Table(data, repeatRows=1)
+                table.setStyle(TableStyle([
+                    ('BACKGROUND', (0, 0), (-1, 0), colors.lightblue),
+                    ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+                    ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+                    ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                    ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+                    ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
+                    ('GRID', (0, 0), (-1, -1), 1, colors.black),
+                ]))
+                
+                elements.append(table)
+                
+                # Footer
+                elements.append(Spacer(1, 20))
+                footer_text = f"Generated on {pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S')}"
+                footer = Paragraph(footer_text, styles['Normal'])
+                elements.append(footer)
+                
+                # Build the PDF
+                doc.build(elements)
+                
+                # Set filename for download
+                filename = f"attendance_report_{class_name}_{division}_{subject}.pdf"
+                
+                return send_file(
+                    tmp.name,
+                    mimetype='application/pdf',
+                    download_name=filename,
+                    as_attachment=True
+                )
+        else:
+            return jsonify({'status': 'fail', 'message': f'Unsupported format: {format}'}), 400
+    
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'status': 'fail', 'message': f"Server error: {str(e)}"}), 500
+
+
+
+
+
+
     
 if __name__ == '__main__':
     app.run(debug=True, host="0.0.0.0")
+
+
+    
